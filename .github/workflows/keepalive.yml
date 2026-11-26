@@ -1,0 +1,47 @@
+# Keeps the free Supabase project awake (free projects pause after 7 days without use).
+# Every 3 days: calls the tiny "keepalive" function (returns "ok", reads no data).
+# 1st of each month: also saves keepalive.txt so GitHub keeps this schedule running
+# (GitHub switches off schedules in repositories with no activity for 60 days).
+name: Keep Supabase awake
+
+on:
+  schedule:
+    - cron: "17 6 */3 * *"
+    - cron: "41 5 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        env:
+          URL: https://ojdkuufqvhcjrjbcmoaw.supabase.co
+          KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qZGt1dWZxdmhjanJqYmNtb2F3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU2ODIxNTcsImV4cCI6MjExMTI1ODE1N30.vbxAkH9bvfIy4LnHwxdleOKTH-lMcztCK2IV8-Y7AiQ
+        run: |
+          for i in 1 2 3; do
+            code=$(curl -s -o r.txt -w "%{http_code}" -X POST "$URL/rest/v1/rpc/keepalive" \
+              -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{}')
+            echo "Attempt $i: HTTP $code $(cat r.txt)"
+            [ "$code" = "200" ] && exit 0
+            sleep 60
+          done
+          echo "Supabase did not answer - open the dashboard and click Restore if the project is paused."
+          exit 1
+
+  heartbeat:
+    if: github.event.schedule == '41 5 1 * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Monthly heartbeat commit
+        run: |
+          date -u +"Last keep-alive: %Y-%m-%d %H:%M UTC" > keepalive.txt
+          git config user.name "keepalive-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add keepalive.txt
+          git commit -m "Monthly keep-alive" || echo "Nothing to commit"
+          git push
