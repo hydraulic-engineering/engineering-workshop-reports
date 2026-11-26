@@ -2,8 +2,8 @@
    Network first (always the latest version when online), cached copy when offline.
    Jobs and photos are never cached here: they come live from Supabase. */
 const CACHE = "ewr-v1";
-const SHELL = ["./", "index.html", "config.js", "manifest.webmanifest", "vendor/supabase.js", "vendor/jszip.min.js",
-  "vendor/jspdf.umd.min.js", "layout_793d.jpg", "layout_777.jpg", "icons/icon-192.png", "icons/icon-512.png"];
+const SHELL = ["./", "index.html", "config.js", "manifest.webmanifest", "supabase.js", "jszip.min.js",
+  "jspdf.umd.min.js", "layout_793d.jpg", "layout_777.jpg", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {

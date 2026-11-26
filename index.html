@@ -4,16 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engineering Workshop Reports</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co; worker-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="theme-color" content="#2f3a45">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Workshop Reports">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" type="image/png" href="icons/icon-192.png">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <script src="config.js"></script>
-<script src="vendor/supabase.js"></script>
-<script src="vendor/jszip.min.js"></script>
-<script src="vendor/jspdf.umd.min.js"></script>
+<script src="supabase.js"></script>
+<script src="jszip.min.js"></script>
+<script src="jspdf.umd.min.js"></script>
 <style>
 :root{
   --bg:#f4f3ef; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6a64; --line:#dddad2;
@@ -32,6 +34,11 @@ aside{background:var(--steel);color:#e8ebee;display:flex;flex-direction:column;m
 .brand small{color:#aab4bd}
 .side-actions{padding:12px 14px;display:flex;gap:8px}
 .side-actions input{flex:1;min-width:0;background:#3a4652;border:1px solid #4d5a67;border-radius:6px;padding:7px 9px;color:#fff}
+.usage{margin-top:8px;font-size:11.5px;color:#cfd6dc}
+.usage .bar{height:6px;background:#46525e;border-radius:4px;overflow:hidden;margin-top:3px}
+.usage .bar i{display:block;height:100%;background:#2e7d4f}
+.usage.warn .bar i{background:#e3b91c}.usage.full .bar i{background:#d9534f}
+.pill.arch{background:#5a6b7c;color:#fff}
 .side-filters{display:flex;gap:6px;padding:0 14px 10px}
 .side-filters select{flex:1;min-width:0;background:#3a4652;border:1px solid #4d5a67;border-radius:6px;padding:5px 6px;color:#fff;font-size:12.5px}
 .joblist{overflow:auto;flex:1;padding:0 8px 12px}
@@ -181,9 +188,10 @@ dialog .df{padding:12px 18px 16px;display:flex;justify-content:flex-end;gap:8px}
   <aside>
     <div class="brand"><img id="logoSide" alt=""><div><b>Engineering Workshop Reports</b><small>Hydraulic Engineering SARL</small></div></div>
     <div class="side-actions"><input id="search" placeholder="Search jobs…"><button class="btn primary small" id="newJobBtn">+ New job</button></div>
-    <div class="side-filters"><select id="fCat"><option value="">All categories</option></select><select id="fStage"><option value="">All stages</option><option value="cond">Condition open</option><option value="wip">WIP open</option><option value="ready">Completion ready</option></select></div>
+    <div class="side-filters"><select id="fCat"><option value="">All categories</option></select><select id="fStage"><option value="active">Active jobs</option><option value="cond">Condition open</option><option value="wip">WIP open</option><option value="ready">Ready to archive</option><option value="archived">Archived</option><option value="">All jobs</option></select></div>
     <div class="joblist" id="joblist"></div>
     <div class="side-note"><span id="syncNote">Connecting…</span>
+      <div id="usage" class="usage" title="Photos of active jobs stored in the cloud (free plan: 1 GB). Archive finished jobs to free space."></div>
       <div id="who" style="margin-top:6px;color:#dfe5ea;font-size:12px;word-break:break-all"></div>
       <div class="row" style="margin-top:8px;gap:6px">
         <button class="btn small" id="installBtn" style="display:none;flex:1;justify-content:center">📲 Install app</button>
@@ -346,6 +354,7 @@ function normalize(j){
   return j;
 }
 function completionState(j){
+  if(j.archived) return {ready:true,missing:[]};
   const missing=[];
   if(!j.cond.photos.length) missing.push("Condition Report has no inspection photos");
   if(!j.cond.done) missing.push("Condition Report not marked complete");
@@ -378,7 +387,7 @@ async function hydrateImgs(root){
 }
 function stripLocal(j){ // never write in-memory-only photos into the database
   const c=clone(j);
-  const f=a=>a.filter(p=>p.id).map(p=>({id:p.id,w:p.w,h:p.h,name:p.name||""}));
+  const f=a=>a.filter(p=>p.id).map(p=>({id:p.id,w:p.w,h:p.h,name:p.name||"",size:p.size||0}));
   c.cond.photos=f(c.cond.photos); c.wip.progress=f(c.wip.progress); c.wip.paint=f(c.wip.paint);
   return c;
 }
@@ -434,7 +443,8 @@ function makeShims(){
     async upload(blob){ const path=(crypto.randomUUID?crypto.randomUUID():uid()+uid())+".jpg";
       const {error}=await SB.storage.from("photos").upload(path,blob,{contentType:"image/jpeg",upsert:false});
       if(error) throw mapErr(error); URLC[path]=URL.createObjectURL(blob); return {id:path}; },
-    async delete(id){ const {error}=await SB.storage.from("photos").remove([id]); if(error) throw mapErr(error); }
+    async delete(id){ const {error}=await SB.storage.from("photos").remove([id]); if(error) throw mapErr(error); },
+    async deleteMany(ids){ for(let i=0;i<ids.length;i+=100){ const {error}=await SB.storage.from("photos").remove(ids.slice(i,i+100)); if(error) throw mapErr(error); } }
   };
   DL={ async save({filename,data}){
     const blob=data instanceof Blob?data:new Blob([data]); const u=URL.createObjectURL(blob);
@@ -452,7 +462,7 @@ function showSetupNeeded(){
     Your administrator needs to fill in <code>config.js</code> with the Supabase project URL and anon key (see README.md).</div>`;
 }
 async function initPlatform(){
-  if(!window.supabase||!window.supabase.createClient){ showSetupNeeded(); $("#loginBody").insertAdjacentHTML("beforeend",`<div class="login-err">vendor/supabase.js didn't load.</div>`); return; }
+  if(!window.supabase||!window.supabase.createClient){ showSetupNeeded(); $("#loginBody").insertAdjacentHTML("beforeend",`<div class="login-err">supabase.js didn't load.</div>`); return; }
   if(!cfgOk()){ showSetupNeeded(); return; }
   const c=window.EWR_CONFIG;
   SB=window.supabase.createClient(c.SUPABASE_URL,c.SUPABASE_ANON_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
@@ -554,7 +564,7 @@ async function addPhotos(path, files){
   for(const f of files){
     const ph={w:0,h:0,name:f.name,busy:true,tmp:uid()}; list.push(ph); renderPhotos(path);
     try{
-      const {blob,w,h}=await prepPhoto(f); ph.w=w; ph.h=h;
+      const {blob,w,h}=await prepPhoto(f); ph.w=w; ph.h=h; ph.size=blob.size;
       if(ASSETS&&canWrite){ const r=await ASSETS.upload(blob); ph.id=r.id; }
       else { ph.src=await new Promise(r=>{const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(blob);}); }
       delete ph.busy; delete ph.tmp;
@@ -629,11 +639,22 @@ function fileBase(j,kind){
 function sortedJobs(){
   const q=($("#search").value||"").toLowerCase();
   const fc=$("#fCat").value, fs=$("#fStage").value;
-  return Object.entries(JOBS).filter(([id,j])=>(!fc||j.category===fc)&&(!fs||(fs==="cond"?!j.cond.done:fs==="wip"?(j.cond.done&&!j.wip.done):completionState(j).ready)))
+  const stageOk=j=>!fs||(fs==="active"?!j.archived:fs==="archived"?!!j.archived:j.archived?false:fs==="cond"?!j.cond.done:fs==="wip"?(j.cond.done&&!j.wip.done):completionState(j).ready);
+  return Object.entries(JOBS).filter(([id,j])=>(!fc||j.category===fc)&&stageOk(j))
     .filter(([id,j])=>!q||[j.header.jobNo,j.header.desc,j.header.item,j.header.customer,j.header.event,j.header.assetId].join(" ").toLowerCase().includes(q))
     .sort((a,b)=>(b[1].createdAt||0)-(a[1].createdAt||0));
 }
+const CLOUD_LIMIT=(window.EWR_CONFIG&&+EWR_CONFIG.CLOUD_LIMIT_MB||1024)*1024*1024;
+function cloudBytes(){ let t=0; Object.values(JOBS).forEach(j=>{ if(j.archived) return; [j.cond.photos,j.wip.progress,j.wip.paint].forEach(a=>a.forEach(p=>{ if(p.id) t+=p.size||300000; })); }); return t; }
+function renderUsage(){
+  const el=$("#usage"); if(!el) return; const b=cloudBytes(), pct=Math.min(100,b/CLOUD_LIMIT*100);
+  const ready=Object.values(JOBS).filter(j=>!j.archived&&completionState(j).ready).length;
+  el.className="usage"+(pct>=95?" full":pct>=80?" warn":"");
+  el.innerHTML=`Cloud photos: ${(b/1048576).toFixed(0)} MB of ${(CLOUD_LIMIT/1048576).toFixed(0)} MB${ready?` · <b>${ready}</b> ready to archive`:""}<div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>`;
+  if(pct>=80&&!renderUsage.warned){ renderUsage.warned=true; toast(`Cloud space ${pct.toFixed(0)}% used — archive finished jobs to free space`); }
+}
 function renderList(){
+  renderUsage();
   const el=$("#joblist"); const list=sortedJobs();
   if(!list.length){ el.innerHTML=`<div class="muted" style="padding:14px 8px;color:#aab4bd;font-size:13px">${Object.keys(JOBS).length?"No jobs match.":"No jobs yet. Start with “+ New job”."}</div>`; return; }
   el.innerHTML=list.map(([id,j])=>{
@@ -642,7 +663,7 @@ function renderList(){
       <div class="jn">${esc(j.header.jobNo||"New job")}</div>
       <div class="jd">${esc(j.header.desc||j.header.item||"—")}</div>
       <div class="jd" style="color:#e3b91c;font-size:11px">${esc(catOf(j).label)}</div>
-      <div class="pills"><span class="pill ${j.cond.done?"ok":""}">Condition</span><span class="pill ${j.wip.done?"ok":""}">WIP</span><span class="pill ${cs.ready?"ok":""}">Completion</span></div>
+      <div class="pills">${j.archived?`<span class="pill arch">📦 Archived ${esc(j.archived.at||"")}</span>`:`<span class="pill ${j.cond.done?"ok":""}">Condition</span><span class="pill ${j.wip.done?"ok":""}">WIP</span><span class="pill ${cs.ready?"ok":""}">Completion</span>`}</div>
     </button>`;}).join("");
 }
 
@@ -719,6 +740,13 @@ function renderPhotos(path){
 function renderEditor(){
   const j=JOBS[curId]; const el=$("#editor"); if(!el) return;
   let h="";
+  if(j.archived){
+    const a=j.archived;
+    h+=`<div class="status ready" style="display:block"><b>📦 Archived on ${esc(a.at||"")}.</b> All reports and ${a.photos||0} photos were saved to <b>${esc(a.where||"your PC")}</b>, and the photos were removed from the cloud to free space.</div>`;
+    h+=headerCard(tab);
+    h+=`<div class="card"><h2>Archive contents</h2><div class="muted" style="font-size:13px">${(a.files||[]).map(f=>esc(f)).join("<br>")||"—"}</div></div>`;
+    el.innerHTML=h; return;
+  }
   if(tab==="cond"){
     const c=j.cond, cat=catOf(j); const ac=cat.comps.includes(c.activeComp)?c.activeComp:cat.comps[0];
     h+=headerCard("cond");
@@ -765,6 +793,13 @@ function renderEditor(){
     h+=`<div class="card"><h2>Photo sources</h2><div class="muted" style="font-size:13px">Section 1 “${esc((j.header.item||"Item")+" Initial Condition")}” = all Condition Report inspection photos (no text sections).<br>
       Section 2 “Completed Project” = all WIP “Paint &amp; Package” photos. To change photos, edit them in those reports.</div></div>`;
     h+=exportCard("comp",cs.ready);
+    h+=`<div class="card"><h2>📦 Archive this job <span class="lock">frees cloud space</span></h2>
+      <div class="muted" style="font-size:13px;margin-bottom:10px">Saves the Condition, WIP and Completion reports (Word + PDF), every photo and the job data
+      ${window.showDirectoryPicker?`into <b>${esc((archiveDirName&&archiveDirName+"\\")||"a folder you choose")}${esc(safeName(j.header.jobNo||"job"))}</b> on this PC`:"as one ZIP file"}.
+      Then, after you confirm, the job's photos are deleted from the cloud. The job stays in the list, marked “Archived”.</div>
+      <div class="exportbar"><button class="btn primary" data-archive="1" ${cs.ready&&DL?"":"disabled"}>📦 Archive to PC &amp; free cloud space</button>
+      ${window.showDirectoryPicker&&archiveDirName?`<button class="btn small" data-archdir="1">Change folder</button>`:""}</div>
+      ${cs.ready?"":`<div class="muted" style="font-size:12px;margin-top:6px">Available when both reports are complete.</div>`}</div>`;
   }
   if(tab!=="comp") h+=exportCard(tab,true);
   el.innerHTML=h;
@@ -789,6 +824,7 @@ let prevTimer=null;
 function renderPreview(){ clearTimeout(prevTimer); prevTimer=setTimeout(_renderPreview,120); }
 function _renderPreview(){
   const j=JOBS[curId]; const el=$("#preview"); if(!j||!el) return;
+  if(j.archived){ el.innerHTML=`<div class="empty" style="height:auto;padding:60px 20px"><div style="font-size:40px">📦</div><div><b>Archived</b> — the reports are saved in ${esc(j.archived.where||"your PC")}.</div></div>`; return; }
   const kind=tab; const B=model(j,kind);
   // paginate by rough height units (page = 100)
   const pages=[[]]; let used=0; const push=(html,hh)=>{ if(used+hh>100&&pages[pages.length-1].length){ pages.push([]); used=0; } pages[pages.length-1].push(html); used+=hh; };
@@ -864,6 +900,8 @@ document.addEventListener("click",async e=>{
   if(d.pm){ const [p,i,dir]=d.pm.split("|"); const a=getPath(j,p); const k=+i+(+dir); if(k<0||k>=a.length) return; [a[+i],a[k]]=[a[k],a[+i]]; scheduleSave(curId); renderPhotos(p); renderPreview(); return; }
   if(d.pd){ const [p,i]=d.pd.split("|"); const a=getPath(j,p); a.splice(+i,1); scheduleSave(curId); renderPhotos(p); renderPreview(); renderTabs(); renderList(); return; }
   if(d.exp){ const [kind,fmt]=d.exp.split("|"); doExport(kind,fmt,t); return; }
+  if(d.archive){ archiveJob(t); return; }
+  if(d.archdir){ try{ const r=await pickArchiveDir(true); if(r&&r!=="cancel"){ toast("Archive folder: "+archiveDirName); renderEditor(); } }catch(e){} return; }
 });
 document.addEventListener("change",e=>{
   const t=e.target, j=JOBS[curId]; if(!j) return;
@@ -916,6 +954,82 @@ async function doExport(kind,fmt,btn){
     else if(e&&e.code==="rate_limited") toast("A download prompt is already open");
     else { console.error(e); dialog("Export failed",esc((e&&(e.message||e.code))||String(e)),"Close",false); }
   }finally{ btn.disabled=false; btn.innerHTML=old; }
+}
+
+/* ============================================================
+   Archive: reports + photos -> PC folder (or ZIP), then free cloud space
+   ============================================================ */
+let archiveDir=null, archiveDirName="";
+function idb(){ return new Promise((res,rej)=>{ try{ const r=indexedDB.open("ewr",1); r.onupgradeneeded=()=>r.result.createObjectStore("kv"); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }catch(e){ rej(e); } }); }
+async function kvGet(k){ try{ const d=await idb(); return await new Promise(r=>{ const q=d.transaction("kv").objectStore("kv").get(k); q.onsuccess=()=>r(q.result); q.onerror=()=>r(null); }); }catch(e){ return null; } }
+async function kvSet(k,v){ try{ const d=await idb(); await new Promise(r=>{ const t=d.transaction("kv","readwrite"); t.objectStore("kv").put(v,k); t.oncomplete=r; t.onerror=r; }); }catch(e){} }
+(async()=>{ const h=await kvGet("archiveDir"); if(h){ archiveDir=h; archiveDirName=h.name; } })();
+async function pickArchiveDir(force){   // must run first in a click handler (browser rule)
+  if(!window.showDirectoryPicker) return null;
+  if(archiveDir&&!force){
+    let st="prompt"; try{ st=await archiveDir.queryPermission({mode:"readwrite"}); }catch(e){}
+    if(st!=="granted"){ try{ st=await archiveDir.requestPermission({mode:"readwrite"}); }catch(e){ st="denied"; } }
+    if(st==="granted") return archiveDir;
+  }
+  try{ archiveDir=await window.showDirectoryPicker({id:"ewr-archive",mode:"readwrite",startIn:"desktop"}); }
+  catch(e){ if(e&&e.name==="AbortError") return "cancel"; throw e; }
+  archiveDirName=archiveDir.name; await kvSet("archiveDir",archiveDir); return archiveDir;
+}
+async function writeFile(dir,path,data){
+  const parts=path.split("/"); let d=dir;
+  for(const seg of parts.slice(0,-1)) d=await d.getDirectoryHandle(seg,{create:true});
+  const fh=await d.getFileHandle(parts[parts.length-1],{create:true}); const w=await fh.createWritable();
+  await w.write(data instanceof Uint8Array?new Blob([data]):data); await w.close();
+}
+async function buildArchiveFiles(j,progress){
+  const files=[]; const kinds=[["cond","Condition"],["wip","WIP"],["comp","Completion"]];
+  for(const [k] of kinds){ progress("Building "+k+" report…"); const B=model(j,k); const base=fileBase(j,k);
+    files.push([base+".docx",await buildDocx(B)]); files.push([base+".pdf",await buildPdf(B)]); }
+  const groups=[["cond.photos","Photos/1 Condition (before repair)","Condition"],["wip.progress","Photos/2 Work in progress","WIP"],["wip.paint","Photos/3 Paint & Package","Paint"]];
+  let n=0;
+  for(const [path,folder,pre] of groups){ const list=getPath(j,path);
+    for(let i=0;i<list.length;i++){ progress(`Saving photos ${++n}…`); files.push([`${folder}/${pre} ${String(i+1).padStart(2,"0")}.jpg`,await photoBytes(list[i])]); } }
+  files.push(["job-data.json",JSON.stringify(stripLocal(j),null,1)]);
+  return {files,photos:n};
+}
+async function archiveJob(btn){
+  const id=curId, j=JOBS[id]; if(!j||!completionState(j).ready) return;
+  const jobFolder=safeName(j.header.jobNo||"Job "+id);
+  // 1) where to save — asked first, while the click still counts
+  let dir=null;
+  if(window.showDirectoryPicker){
+    if(!archiveDir) await dialog("Choose the archive folder",`<p>Pick the folder that holds your job folders, e.g. <b>Desktop › completion report › engineering</b>.
+      The app creates <b>${esc(jobFolder)}</b> inside it. You only choose this once.</p>`,"Choose folder",false);
+    try{ dir=await pickArchiveDir(false); }catch(e){ dir=null; }
+    if(dir==="cancel") return;
+  }
+  const old=btn.innerHTML; btn.disabled=true; const prog=t=>{ btn.textContent=t; };
+  try{
+    // 2) build everything
+    const {files,photos}=await buildArchiveFiles(j,prog);
+    // 3) save
+    let where="";
+    if(dir){ prog("Writing to "+dir.name+"…"); const sub=await dir.getDirectoryHandle(jobFolder,{create:true});
+      for(const [path,data] of files) await writeFile(sub,path,data);
+      where=dir.name+"\\"+jobFolder; }
+    else { prog("Zipping…"); const zip=new JSZip(); files.forEach(([path,data])=>zip.file(jobFolder+"/"+path,data));
+      const blob=await zip.generateAsync({type:"blob",compression:"STORE"}); await DL.save({filename:jobFolder+" archive.zip",data:blob});
+      const got=await dialog("Is the ZIP saved?",`<p>The download <b>${esc(jobFolder)} archive.zip</b> (${(blob.size/1048576).toFixed(1)} MB) should be in your Downloads.
+        Open or move it to a safe place before continuing.</p>`,"Yes, it's saved");
+      if(!got){ toast("Archive stopped — nothing was deleted"); return; }
+      where="ZIP: "+jobFolder+" archive.zip"; }
+    // 4) free cloud space — only with a clear yes
+    const ids=[...j.cond.photos,...j.wip.progress,...j.wip.paint].map(p=>p.id).filter(Boolean);
+    const ok=await dialog("Free cloud space?",`<p>Saved ${files.length} files to <b>${esc(where)}</b>.</p>
+      <p>Delete this job's <b>${ids.length} photos</b> from the cloud now? They stay in the archive on your PC; the cloud copy can't be recovered.</p>`,"Delete cloud photos");
+    if(!ok){ toast("Archive saved — cloud photos kept"); return; }
+    prog("Freeing cloud space…");
+    if(ASSETS){ if(ASSETS.deleteMany) await ASSETS.deleteMany(ids); else for(const x of ids) await ASSETS.delete(x); }
+    j.archived={at:todayStr(),where,photos,files:files.map(f=>f[0])};
+    j.cond.photos=[]; j.wip.progress=[]; j.wip.paint=[];
+    scheduleSave(id,50); renderAll(); toast("Job archived — "+ids.length+" photos removed from the cloud");
+  }catch(e){ console.error(e); dialog("Archive failed",`<p>${esc(e.message||String(e))}</p><p>Nothing was deleted from the cloud.</p>`,"Close",false); }
+  finally{ if(btn.isConnected){ btn.disabled=false; btn.innerHTML=old; } }
 }
 
 /* ============================================================
